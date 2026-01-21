@@ -266,7 +266,18 @@ kubectl get secretproviderclass
 
 ## 🔧 Components Explained
 
+### Architecture Deep Dive
+
+For detailed architecture diagrams and explanations, see **[ARCHITECTURE_DEEP_DIVE.md](ARCHITECTURE_DEEP_DIVE.md)**
+
+**Includes:**
+- 🔒 OPA Gatekeeper admission control flow
+- 🔑 IRSA (IAM Roles for Service Accounts) detailed flow
+- 🔐 OIDC trust relationship explained
+
 ### 1. IRSA (IAM Roles for Service Accounts)
+
+![IRSA Flow](irsa_detailed_flow.png)
 
 **What is IRSA?**
 IRSA allows Kubernetes pods to assume IAM roles without using static AWS credentials.
