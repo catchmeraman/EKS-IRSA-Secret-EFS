@@ -358,6 +358,175 @@ resource "helm_release" "secrets_provider_aws" {
   depends_on = [helm_release.secrets_store_csi_driver]
 }
 
+# OPA Gatekeeper for Admission Control
+resource "helm_release" "gatekeeper" {
+  name       = "gatekeeper"
+  repository = "https://open-policy-agent.github.io/gatekeeper/charts"
+  chart      = "gatekeeper"
+  namespace  = "gatekeeper-system"
+  create_namespace = true
+
+  set {
+    name  = "replicas"
+    value = "2"
+  }
+
+  set {
+    name  = "auditInterval"
+    value = "60"
+  }
+
+  depends_on = [module.eks]
+}
+
+# Constraint Template: Require Labels
+resource "kubectl_manifest" "require_labels_template" {
+  yaml_body = <<-YAML
+    apiVersion: templates.gatekeeper.sh/v1
+    kind: ConstraintTemplate
+    metadata:
+      name: k8srequiredlabels
+    spec:
+      crd:
+        spec:
+          names:
+            kind: K8sRequiredLabels
+          validation:
+            openAPIV3Schema:
+              type: object
+              properties:
+                labels:
+                  type: array
+                  items:
+                    type: string
+      targets:
+        - target: admission.k8s.gatekeeper.sh
+          rego: |
+            package k8srequiredlabels
+            violation[{"msg": msg, "details": {"missing_labels": missing}}] {
+              provided := {label | input.review.object.metadata.labels[label]}
+              required := {label | label := input.parameters.labels[_]}
+              missing := required - provided
+              count(missing) > 0
+              msg := sprintf("You must provide labels: %v", [missing])
+            }
+  YAML
+
+  depends_on = [helm_release.gatekeeper]
+}
+
+# Constraint: Enforce Labels on Deployments
+resource "kubectl_manifest" "require_labels_constraint" {
+  yaml_body = <<-YAML
+    apiVersion: constraints.gatekeeper.sh/v1beta1
+    kind: K8sRequiredLabels
+    metadata:
+      name: deployment-must-have-labels
+    spec:
+      match:
+        kinds:
+          - apiGroups: ["apps"]
+            kinds: ["Deployment"]
+      parameters:
+        labels: ["app", "environment"]
+  YAML
+
+  depends_on = [kubectl_manifest.require_labels_template]
+}
+
+# Constraint Template: Block Privileged Containers
+resource "kubectl_manifest" "block_privileged_template" {
+  yaml_body = <<-YAML
+    apiVersion: templates.gatekeeper.sh/v1
+    kind: ConstraintTemplate
+    metadata:
+      name: k8sblockprivileged
+    spec:
+      crd:
+        spec:
+          names:
+            kind: K8sBlockPrivileged
+      targets:
+        - target: admission.k8s.gatekeeper.sh
+          rego: |
+            package k8sblockprivileged
+            violation[{"msg": msg}] {
+              container := input.review.object.spec.containers[_]
+              container.securityContext.privileged
+              msg := sprintf("Privileged container is not allowed: %v", [container.name])
+            }
+  YAML
+
+  depends_on = [helm_release.gatekeeper]
+}
+
+# Constraint: Block Privileged Containers
+resource "kubectl_manifest" "block_privileged_constraint" {
+  yaml_body = <<-YAML
+    apiVersion: constraints.gatekeeper.sh/v1beta1
+    kind: K8sBlockPrivileged
+    metadata:
+      name: block-privileged-containers
+    spec:
+      match:
+        kinds:
+          - apiGroups: [""]
+            kinds: ["Pod"]
+          - apiGroups: ["apps"]
+            kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+  YAML
+
+  depends_on = [kubectl_manifest.block_privileged_template]
+}
+
+# Constraint Template: Require Resource Limits
+resource "kubectl_manifest" "require_resources_template" {
+  yaml_body = <<-YAML
+    apiVersion: templates.gatekeeper.sh/v1
+    kind: ConstraintTemplate
+    metadata:
+      name: k8srequireresources
+    spec:
+      crd:
+        spec:
+          names:
+            kind: K8sRequireResources
+      targets:
+        - target: admission.k8s.gatekeeper.sh
+          rego: |
+            package k8srequireresources
+            violation[{"msg": msg}] {
+              container := input.review.object.spec.containers[_]
+              not container.resources.limits.cpu
+              msg := sprintf("Container %v must have CPU limits", [container.name])
+            }
+            violation[{"msg": msg}] {
+              container := input.review.object.spec.containers[_]
+              not container.resources.limits.memory
+              msg := sprintf("Container %v must have memory limits", [container.name])
+            }
+  YAML
+
+  depends_on = [helm_release.gatekeeper]
+}
+
+# Constraint: Require Resource Limits
+resource "kubectl_manifest" "require_resources_constraint" {
+  yaml_body = <<-YAML
+    apiVersion: constraints.gatekeeper.sh/v1beta1
+    kind: K8sRequireResources
+    metadata:
+      name: require-resource-limits
+    spec:
+      match:
+        kinds:
+          - apiGroups: ["apps"]
+            kinds: ["Deployment", "StatefulSet"]
+  YAML
+
+  depends_on = [kubectl_manifest.require_resources_template]
+}
+
 # Sample Secret in Secrets Manager
 resource "aws_secretsmanager_secret" "app_secret" {
   name                    = "${var.cluster_name}-app-secret"
