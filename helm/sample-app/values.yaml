@@ -1,0 +1,35 @@
+replicaCount: 3
+
+image:
+  repository: nginx
+  tag: latest
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: false
+  name: app-sa
+
+volumes:
+  efs:
+    enabled: true
+    storageClass: efs-sc
+    size: 5Gi
+  ebs:
+    enabled: true
+    storageClass: ebs-gp3
+    size: 10Gi
+  secrets:
+    enabled: true
+    secretName: app-secret
+
+service:
+  type: ClusterIP
+  port: 80
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi

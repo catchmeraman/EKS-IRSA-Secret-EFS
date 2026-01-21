@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+bases:
+- ../base
+
+replicas:
+- name: aws-cli-app
+  count: 3
+
+commonLabels:
+  environment: production

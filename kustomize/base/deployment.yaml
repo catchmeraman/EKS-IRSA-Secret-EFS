@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aws-cli-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: aws-cli-app
+  template:
+    metadata:
+      labels:
+        app: aws-cli-app
+    spec:
+      serviceAccountName: app-sa
+      containers:
+      - name: aws-cli
+        image: amazon/aws-cli:latest
+        command: ["sleep", "3600"]
+        env:
+        - name: AWS_REGION
+          value: us-east-1
+        - name: DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: app-secret-k8s
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: app-secret-k8s
+              key: password
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        volumeMounts:
+        - name: ebs-storage
+          mountPath: /data
+        - name: secrets-store
+          mountPath: /mnt/secrets
+          readOnly: true
+      volumes:
+      - name: ebs-storage
+        persistentVolumeClaim:
+          claimName: aws-cli-ebs-pvc
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: aws-cli-secrets
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aws-cli-ebs-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ebs-gp3
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: aws-cli-secrets
+spec:
+  provider: aws
+  parameters:
+    objects: |
+      - objectName: "my-eks-cluster-app-secret"
+        objectType: "secretsmanager"
+        jmesPath:
+          - path: username
+            objectAlias: username
+          - path: password
+            objectAlias: password
+          - path: api_key
+            objectAlias: api_key
+  secretObjects:
+  - secretName: app-secret-k8s
+    type: Opaque
+    data:
+    - objectName: username
+      key: username
+    - objectName: password
+      key: password
+    - objectName: api_key
+      key: api_key

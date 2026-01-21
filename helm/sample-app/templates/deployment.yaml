@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    app: {{ .Chart.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Chart.Name }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+      - name: app
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: 80
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        env:
+        - name: AWS_REGION
+          value: "us-east-1"
+        {{- if .Values.volumes.secrets.enabled }}
+        - name: DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: app-secret-k8s
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: app-secret-k8s
+              key: password
+        {{- end }}
+        volumeMounts:
+        {{- if .Values.volumes.efs.enabled }}
+        - name: efs-storage
+          mountPath: /mnt/efs
+        {{- end }}
+        {{- if .Values.volumes.ebs.enabled }}
+        - name: ebs-storage
+          mountPath: /mnt/ebs
+        {{- end }}
+        {{- if .Values.volumes.secrets.enabled }}
+        - name: secrets-store
+          mountPath: /mnt/secrets
+          readOnly: true
+        {{- end }}
+      volumes:
+      {{- if .Values.volumes.efs.enabled }}
+      - name: efs-storage
+        persistentVolumeClaim:
+          claimName: {{ .Chart.Name }}-efs-pvc
+      {{- end }}
+      {{- if .Values.volumes.ebs.enabled }}
+      - name: ebs-storage
+        persistentVolumeClaim:
+          claimName: {{ .Chart.Name }}-ebs-pvc
+      {{- end }}
+      {{- if .Values.volumes.secrets.enabled }}
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: {{ .Chart.Name }}-secrets
+      {{- end }}
+---
+{{- if .Values.volumes.efs.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Chart.Name }}-efs-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: {{ .Values.volumes.efs.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.volumes.efs.size }}
+---
+{{- end }}
+{{- if .Values.volumes.ebs.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Chart.Name }}-ebs-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.volumes.ebs.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.volumes.ebs.size }}
+---
+{{- end }}
+{{- if .Values.volumes.secrets.enabled }}
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: {{ .Chart.Name }}-secrets
+spec:
+  provider: aws
+  parameters:
+    objects: |
+      - objectName: "my-eks-cluster-app-secret"
+        objectType: "secretsmanager"
+        jmesPath:
+          - path: username
+            objectAlias: username
+          - path: password
+            objectAlias: password
+          - path: api_key
+            objectAlias: api_key
+  secretObjects:
+  - secretName: app-secret-k8s
+    type: Opaque
+    data:
+    - objectName: username
+      key: username
+    - objectName: password
+      key: password
+    - objectName: api_key
+      key: api_key
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Chart.Name }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+  - port: {{ .Values.service.port }}
+    targetPort: 80
+  selector:
+    app: {{ .Chart.Name }}
